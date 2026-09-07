@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:printing/printing.dart';
 
 import 'triage_engine.dart';
+import 'report.dart';
 import 'storage.dart';
 
 void main() => runApp(const TriageApp());
@@ -922,6 +924,25 @@ class _ResultPage extends StatelessWidget {
               },
               icon: const Icon(Icons.copy_outlined),
               label: const Text('Copy summary'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                final bytes = await buildTriagePdf(
+                    result: r, patient: patient);
+                await Printing.sharePdf(
+                    bytes: bytes, filename: pdfFileName(patient, r.createdAt));
+              },
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: const Text('Download PDF'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Printing.layoutPdf(
+                    onLayout: (_) async => buildTriagePdf(
+                        result: r, patient: patient));
+              },
+              icon: const Icon(Icons.print_outlined),
+              label: const Text('Print'),
             ),
           ],
         ),
