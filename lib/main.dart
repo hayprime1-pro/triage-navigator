@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'triage_engine.dart';
+import 'storage.dart';
 
 void main() => runApp(const TriageApp());
 
@@ -32,6 +33,31 @@ class TriageApp extends StatefulWidget {
 
 class _TriageAppState extends State<TriageApp> {
   ThemeMode _mode = ThemeMode.system;
+  final _store = LocalStore();
+
+  @override
+  void initState() {
+    super.initState();
+    _store.loadTheme().then((v) {
+      if (!mounted) return;
+      setState(() {
+        _mode = switch (v) {
+          'light' => ThemeMode.light,
+          'dark' => ThemeMode.dark,
+          _ => ThemeMode.system,
+        };
+      });
+    });
+  }
+
+  void _setMode(ThemeMode m) {
+    setState(() => _mode = m);
+    _store.saveTheme(switch (m) {
+      ThemeMode.light => 'light',
+      ThemeMode.dark => 'dark',
+      ThemeMode.system => 'system',
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -105,7 +131,7 @@ class _TriageAppState extends State<TriageApp> {
       themeMode: _mode,
       home: AppShell(
         mode: _mode,
-        onModeChanged: (m) => setState(() => _mode = m),
+        onModeChanged: _setMode,
       ),
     );
   }
@@ -139,6 +165,33 @@ class _AppShellState extends State<AppShell> {
   TriageResult? _lastResult;
   final List<HistoryEntry> _history = [];
   List<RoutingRule> _rules = defaultRules();
+  final _store = LocalStore();
+
+  @override
+  void initState() {
+    super.initState();
+    _store.loadHistory().then((items) {
+      if (!mounted || items.isEmpty) return;
+      setState(() {
+        _history.clear();
+        _history.addAll(items.map((s) => HistoryEntry(
+              patient: s.patient,
+              result: resultFromJson(s.resultJson),
+            )));
+      });
+    });
+    _store.loadRules().then((r) {
+      if (!mounted || r == null || r.isEmpty) return;
+      setState(() => _rules = r);
+    });
+  }
+
+  Future<void> _persistHistory() => _store.saveHistory(
+        _history.map((e) => e.patient).toList(),
+        _history.map((e) => e.result).toList(),
+      );
+
+  Future<void> _persistRules() => _store.saveRules(_rules);
 
   @override
   void dispose() {
@@ -193,6 +246,7 @@ class _AppShellState extends State<AppShell> {
       );
       _index = 2;
     });
+    _persistHistory();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text('Saved to history (on this device).'),
@@ -247,15 +301,30 @@ class _AppShellState extends State<AppShell> {
           _nameCtrl.text = e.patient;
           _index = 1;
         }),
-        onDelete: (i) => setState(() => _history.removeAt(i)),
-        onClearAll: () => setState(_history.clear),
+        onDelete: (i) {
+          setState(() => _history.removeAt(i));
+          _persistHistory();
+        },
+        onClearAll: () {
+          setState(_history.clear);
+          _persistHistory();
+        },
         onNew: () => _go(0),
       ),
       _RulesPage(
         rules: _rules,
-        onToggle: (i, v) => setState(() => _rules[i].enabled = v),
-        onEdit: (i, r) => setState(() => _rules[i] = r),
-        onReset: () => setState(() => _rules = defaultRules()),
+        onToggle: (i, v) {
+          setState(() => _rules[i].enabled = v);
+          _persistRules();
+        },
+        onEdit: (i, r) {
+          setState(() => _rules[i] = r);
+          _persistRules();
+        },
+        onReset: () {
+          setState(() => _rules = defaultRules());
+          _persistRules();
+        },
       ),
       _SettingsPage(mode: widget.mode, onModeChanged: widget.onModeChanged),
     ];
@@ -930,7 +999,7 @@ class _EmptyState extends StatelessWidget {
 
 // ---------------- History ----------------
 
-class _HistoryPage extends StatelessWidget {
+class _HistoryPage extends StatefulWidget {
   const _HistoryPage({
     required this.history,
     required this.onOpen,
@@ -945,15 +1014,39 @@ class _HistoryPage extends StatelessWidget {
   final VoidCallback onNew;
 
   @override
+  State<_HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<_HistoryPage> {
+  final _searchCtrl = TextEditingController();
+  String _q = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final history = widget.history;
     if (history.isEmpty) {
       return _EmptyState(
         icon: Icons.history_outlined,
         title: 'No history yet',
         body: 'Saved triages stay on this device until the backend lands.',
         actionLabel: 'Start triage',
-        onAction: onNew,
+        onAction: widget.onNew,
       );
+    }
+    final q = _q.trim().toLowerCase();
+    final matches = <int>[];
+    for (var i = 0; i < history.length; i++) {
+      final e = history[i];
+      final hay =
+          '${e.patient} ${e.result.pathway} ${e.result.complexity} ${e.result.riskLevel}'
+              .toLowerCase();
+      if (q.isEmpty || hay.contains(q)) matches.add(i);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -967,46 +1060,86 @@ class _HistoryPage extends StatelessWidget {
                       .titleMedium
                       ?.copyWith(fontWeight: FontWeight.w800)),
             ),
+            IconButton(
+              tooltip: 'Copy history as JSON',
+              icon: const Icon(Icons.ios_share_outlined),
+              onPressed: () async {
+                final data = history
+                    .map((e) => {
+                          'patient': e.patient,
+                          'result': resultToJson(e.result),
+                        })
+                    .toList();
+                await Clipboard.setData(
+                    ClipboardData(text: data.toString()));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('History copied as JSON.')),
+                  );
+                }
+              },
+            ),
             TextButton.icon(
-              onPressed: onClearAll,
+              onPressed: widget.onClearAll,
               icon: const Icon(Icons.delete_sweep_outlined),
               label: const Text('Clear all'),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: history.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemBuilder: (context, i) {
-            final e = history[i];
-            final who = e.patient.trim().isEmpty
-                ? 'Unnamed patient'
-                : e.patient.trim();
-            return Card(
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 8),
-                leading: CircleAvatar(
-                  child: Text('${i + 1}'),
-                ),
-                title: Text('$who • ${e.result.pathway}',
-                    style:
-                        const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text(
-                    '${e.result.complexity} • ${e.result.riskLevel} risk • ${e.result.domainsCount}D/${e.result.riskScore}R'),
-                trailing: IconButton(
-                  tooltip: 'Delete entry $who',
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => onDelete(i),
-                ),
-                onTap: () => onOpen(e),
-              ),
-            );
-          },
+        TextField(
+          controller: _searchCtrl,
+          onChanged: (v) => setState(() => _q = v),
+          decoration: const InputDecoration(
+            labelText: 'Search history',
+            hintText: 'Name, pathway, risk…',
+            prefixIcon: Icon(Icons.search_outlined),
+            border: OutlineInputBorder(),
+          ),
         ),
+        const SizedBox(height: 8),
+        if (matches.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Text('No matches. Try a different search.'),
+            ),
+          )
+        else
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: matches.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 10),
+            itemBuilder: (context, k) {
+              final i = matches[k];
+              final e = history[i];
+              final who = e.patient.trim().isEmpty
+                  ? 'Unnamed patient'
+                  : e.patient.trim();
+              return Card(
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  leading: CircleAvatar(
+                    child: Text('${i + 1}'),
+                  ),
+                  title: Text('$who • ${e.result.pathway}',
+                      style:
+                          const TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: Text(
+                      '${e.result.complexity} • ${e.result.riskLevel} risk • ${e.result.domainsCount}D/${e.result.riskScore}R'),
+                  trailing: IconButton(
+                    tooltip: 'Delete entry $who',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => widget.onDelete(i),
+                  ),
+                  onTap: () => widget.onOpen(e),
+                ),
+              );
+            },
+          ),
       ],
     );
   }

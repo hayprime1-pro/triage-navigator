@@ -1,16 +1,24 @@
-# triage_navigator
+# BACR Patient Triage System
 
-A new Flutter project.
+Flutter Web frontend (Supabase-ready, no backend yet).
 
-## Getting Started
+**Live:** https://hayprime1-pro.github.io/triage-navigator/
 
-This project is a starting point for a Flutter application.
+## What it does
 
-A few resources to get you started if this is your first Flutter project:
+- Guided triage: Functional Domains + Risk Flags + Red Flag → Complexity, Risk, Pathway, Next Step
+- 5 connected pages: Triage, Result, History, Rules, Settings
+- Light / dark / system theme (persisted on-device)
+- History + routing rules persist on-device (SharedPreferences); search + copy-as-JSON export
+- Responsive (320px phones → desktop), accessible (48px targets, screen-reader labels, live result announcements)
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+## Dev
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```sh
+flutter pub get
+flutter analyze
+flutter test
+flutter run -d web-server --web-port 8081
+```
+
+Builds + deploys via GitHub Actions (`.github/workflows/pages.yml`) on every push to `main`.
